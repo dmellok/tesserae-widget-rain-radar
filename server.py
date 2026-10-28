@@ -3,8 +3,8 @@
 Runs on the Tesserae side. ``fetch()`` returns a JSON-serialisable dict, or
 {"error": "friendly message"}; it never raises.
 
-Data comes from two public tile services, both fetched with urllib and cached
-under ``data_dir``:
+Radar comes from a public tile service, fetched with urllib and cached under
+``data_dir``; the coast is read from a file beside this module:
 
 * RainViewer's weather-maps index lists the last two hours of radar frames at
   ten minute steps, each a path to a tile set. The public tier serves tiles
@@ -12,14 +12,16 @@ under ``data_dir``:
   a kilometre a pixel) and scaled onto the map. The server ignores the colour
   scheme number and answers in Universal Blue, whose smoothed tiles still use
   one exact colour per dBZ step, so a pixel's reflectivity is a table lookup.
-* Esri's Light Gray Canvas is a label-free base map: land light grey, water a
-  darker grey, roads white. Thresholds turn it into black line work on paper.
+* The coast needs no network: Natural Earth 1:10m land, minor islands and
+  lakes (public domain) are packed into land.bin beside this file. The rings
+  in view are projected with the same Web Mercator maths, clipped, and sent
+  as SVG path data the client paints from the theme's tokens.
 
-The map is built with Pillow (imported inside functions; the widget degrades
-to a notice without it): the base block is stitched and cropped to a square
-covering 1.6 times the range, the latest frame's reflectivity is classified
-into light, moderate and heavy and drawn as stipple in three densities, and
-the last hour becomes a strip of thumbnails. The headline is worked out from
+The radar layer is built with Pillow (imported inside functions; the widget
+degrades to a notice without it): the view is a square covering 1.6 times the
+range, the latest frame's reflectivity is classified into light, moderate and
+heavy and drawn as stipple in three densities over a transparent background,
+and the last hour becomes a strip of thumbnails the same way. The headline is worked out from
 the nowcast frames when the index carries any, and otherwise from the drift
 of the last half hour's echoes (a cross-correlation of two frames), applied
 to the latest frame and sampled within ten kilometres of home.
@@ -48,10 +50,6 @@ VERSION = "0.1.0"
 USER_AGENT = f"tesserae/{WIDGET}/{VERSION} (+https://github.com/dmellok/tesserae-widget-rain-radar)"
 
 INDEX_URL = "https://api.rainviewer.com/public/weather-maps.json"
-BASE_URL = (
-    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/"
-    "World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-)
 RADAR_ZOOM = 7  # the public tier's ceiling
 RADAR_TILE = 512  # px; a zoom 7 tile at 512 px is a zoom 8 tile at 256 px
 RADAR_OPTIONS = "1_0"  # smoothed, snow drawn in the rain colours
@@ -61,12 +59,10 @@ TIMEOUT = 15
 REQUEST_BUDGET = 40  # tile requests per render; cache hits are free
 INDEX_TTL = 120
 RADAR_TTL = 2 * 3600
-BASE_TTL = 7 * 86400
 RENDER_TTL = 3600
 STALE_TTL = 3 * 3600
 
-MAX_BLOCK = 4  # base tiles across: 4x4 at most
-MIN_SIDE, MAX_SIDE = 320, MAX_BLOCK * TILE - TILE  # the square the map covers, px
+MIN_SIDE, MAX_SIDE = 320, 768  # the square the map covers, px
 VIEW_SPAN = 1.6  # the square's side, in multiples of the range
 
 LIGHT_DBZ, MODERATE_DBZ, HEAVY_DBZ = 10, 28, 40
@@ -81,19 +77,10 @@ COLOURS = {
     "teal": {"light": "#2a7f86", "heavy": "#1b3f45", "tint": "#a6cdd1"},
     "ink": {"light": "#1a1a1a", "heavy": "#000000", "tint": "#b9b9b9"},
 }
-PAPER = (255, 255, 255)
-WATER = (226, 226, 226)
-COAST = (18, 18, 18)
-ROAD = (132, 132, 132)
-LAND_GREY, WATER_GREY = (
-    232,
-    208,
-)  # the levels Esri's canvas uses; land.bin is drawn the same
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LAND_LOCK = threading.Lock()
 _LAND: list | None = None
-_NE_CACHE: dict[tuple, Any] = {}
+_PATH_CACHE: dict[tuple, dict[str, str]] = {}
 
 # RainViewer's Universal Blue rain column, one RGBA hex per dBZ from -32 to 95.
 # From https://www.rainviewer.com/api/color-schemes.html (the only scheme the
@@ -417,21 +404,6 @@ def _stitch(
     return sheet
 
 
-def base_jobs(view: dict[str, Any], data_dir: Path) -> list[tuple[int, int, Path, str]]:
-    z = view["zoom"]
-    n = 2**z
-    x0, y0, x1, y1 = view["base"]
-    out = []
-    for ty in range(y0, y1 + 1):
-        for tx in range(x0, x1 + 1):
-            if not (0 <= ty < n):
-                continue
-            wx = tx % n
-            path = data_dir / "tiles" / "base" / str(z) / f"{wx}_{ty}.jpg"
-            out.append((tx, ty, path, BASE_URL.format(z=z, x=wx, y=ty)))
-    return out
-
-
 def radar_jobs(
     view: dict[str, Any], host: str, frame_path: str, data_dir: Path
 ) -> list[tuple[int, int, Path, str]]:
@@ -451,52 +423,6 @@ def radar_jobs(
             url = f"{host}{frame_path}/{RADAR_TILE}/{RADAR_ZOOM}/{wx}/{ty}/2/{RADAR_OPTIONS}.png"
             out.append((tx, ty, path, url))
     return out
-
-
-def _looks_like_canvas(im) -> bool:
-    """True when a tile has the canvas's land or water greys over most of
-    its area; a placeholder card (white with a line of text) does not."""
-    h = im.histogram()
-    total = float(sum(h)) or 1.0
-    water = sum(h[WATER_GREY - 12 : WATER_GREY + 12])
-    land = sum(h[LAND_GREY - 8 : LAND_GREY + 10])
-    return (water + land) / total >= 0.3
-
-
-def base_grey(view: dict[str, Any], store: TileStore, pil):
-    """The Esri canvas under the view, as one 'L' image of the view square."""
-    Image = pil[0]
-    x0, y0, _x1, _y1 = view["base"]
-    tiles: dict[tuple[int, int], Any] = {}
-    got = 0
-    jobs = base_jobs(view, store.data_dir)
-    for tx, ty, path, _url in jobs:
-        raw = store.get(path)
-        im = None
-        if raw:
-            try:
-                im = Image.open(io.BytesIO(raw)).convert("L")
-            except (OSError, ValueError):
-                im = None
-            if im is not None and not _looks_like_canvas(im):
-                im = None
-            if im is not None:
-                got += 1
-        tiles[(tx, ty)] = im
-    # All or nothing: a view half drawn from tiles and half blank is worse
-    # than the offline coastline, which the caller falls back to.
-    if got < len(jobs):
-        return None
-    sheet = _stitch(view, tiles, view["base"], TILE, "L", 232, pil)
-    side = view["side"]
-    left = view["cx"] - side / 2.0 - x0 * TILE
-    top = view["cy"] - side / 2.0 - y0 * TILE
-    return sheet.transform(
-        (side, side),
-        Image.Transform.EXTENT,
-        (left, top, left + side, top + side),
-        Image.Resampling.BILINEAR,
-    )
 
 
 def radar_raster(
@@ -630,23 +556,13 @@ def _clip_poly(
     return poly
 
 
-def natural_earth_grey(view: dict[str, Any], home_lat: float, home_lon: float, pil):
-    """The view square drawn from land.bin at the grey levels Esri's canvas
-    uses (land 232, water 208), so two_tone() reads it unchanged.
-
-    Coarser than the tiles (the coastline is simplified to about 650 m and
-    there are no roads) but it needs no network at all, so the map still
-    has its coast when the tile server is down or starts asking for a key.
-    """
-    Image, _c, ImageDraw, _f = pil
+def land_rings(
+    view: dict[str, Any], home_lat: float, home_lon: float
+) -> list[tuple[int, list]]:
+    """The land.bin rings in view, projected to the map square's pixels and
+    clipped just outside it: (kind, points), kind 0 land and 1 lakes."""
     side = view["side"]
     z = view["zoom"]
-    key = (round(home_lat, 4), round(home_lon, 4), z, side)
-    hit = _NE_CACHE.get(key)
-    if hit is not None:
-        return hit.copy()
-    im = Image.new("L", (side, side), WATER_GREY)
-    draw = ImageDraw.Draw(im)
     left = view["cx"] - side / 2.0
     top = view["cy"] - side / 2.0
     units_per_deg_lon = TILE * (2.0**z) / 360.0
@@ -654,6 +570,7 @@ def natural_earth_grey(view: dict[str, Any], home_lat: float, home_lon: float, p
     phi = math.radians(max(-85.0, min(85.0, home_lat)))
     half_lat = (side / 2.0) / (units_per_deg_lon / max(0.05, math.cos(phi))) * 1.3
     lat_lo, lat_hi = home_lat - half_lat, home_lat + half_lat
+    out = []
     for kind, pts, (minx, miny, maxx, maxy) in _load_land():
         if maxy < lat_lo or miny > lat_hi:
             continue
@@ -670,11 +587,50 @@ def natural_earth_grey(view: dict[str, Any], home_lat: float, home_lon: float, p
             poly.append((fx * TILE - left, fy * TILE - top))
         clipped = _clip_poly(poly, -4.0, side + 4.0)
         if len(clipped) >= 3:
-            draw.polygon(clipped, fill=LAND_GREY if kind == 0 else WATER_GREY)
-    if len(_NE_CACHE) > 8:
-        _NE_CACHE.clear()
-    _NE_CACHE[key] = im
-    return im.copy()
+            out.append((kind, clipped))
+    return out
+
+
+def _ring_path(poly: list[tuple[float, float]], min_step: float = 0.4) -> str:
+    """One closed subpath to a tenth of a pixel; points closer than
+    min_step px to the last one kept are dropped."""
+    out = []
+    last = None
+    for x, y in poly:
+        if (
+            last is not None
+            and abs(x - last[0]) < min_step
+            and abs(y - last[1]) < min_step
+        ):
+            continue
+        out.append(f"{x:.1f} {y:.1f}")
+        last = (x, y)
+    if len(out) < 3:
+        return ""
+    return "M" + "L".join(out) + "Z"
+
+
+def land_paths(
+    view: dict[str, Any], home_lat: float, home_lon: float
+) -> dict[str, str]:
+    """SVG path data for the land and the lakes over the map square, in its
+    pixels, from Natural Earth 1:10m (land.bin). The client paints them from
+    the theme's tokens, so the coast is crisp at any size and no base map
+    tiles are fetched."""
+    key = (round(home_lat, 4), round(home_lon, 4), view["zoom"], view["side"])
+    hit = _PATH_CACHE.get(key)
+    if hit is not None:
+        return hit
+    paths = {0: [], 1: []}
+    for kind, poly in land_rings(view, home_lat, home_lon):
+        d = _ring_path(poly)
+        if d:
+            paths[kind].append(d)
+    out = {"land": "".join(paths[0]), "water": "".join(paths[1])}
+    if len(_PATH_CACHE) > 16:
+        _PATH_CACHE.clear()
+    _PATH_CACHE[key] = out
+    return out
 
 
 # ---------------------------------------------------------------- drawing
@@ -721,37 +677,16 @@ def _band(raster, lo: int, hi: int):
     return raster.point(list(table))
 
 
-def _hex(c: str) -> tuple[int, int, int]:
+def _hex(c: str) -> tuple[int, int, int, int]:
     c = c.lstrip("#")
-    return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16), 255
 
 
-def two_tone(grey, pil, roads: bool = True, zoom: int = 10):
-    """Esri's grey canvas -> paper, light water with a black coast, grey roads.
-
-    At zooms 7 and 8 the canvas carries country and state names in the same
-    grey as water, so the water mask is opened (a 3 px erosion and dilation)
-    there: lettering and the thinnest rivers go, lakes and coasts stay.
-    """
-    Image, ImageChops, _d, ImageFilter = pil
-    side = grey.size[0]
-    water = grey.point(lambda v: 255 if v <= 218 else 0)
-    if zoom <= 8:
-        water = water.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
-    coast = ImageChops.subtract(water.filter(ImageFilter.MaxFilter(3)), water)
-    canvas = Image.new("RGB", (side, side), PAPER)
-    canvas.paste(WATER, mask=water)
-    if roads:
-        road = grey.point(lambda v: 255 if v >= 248 else 0)
-        canvas.paste(ROAD, mask=road)
-    canvas.paste(COAST, mask=coast)
-    return canvas
-
-
-def paint_rain(canvas, raster, colours: dict[str, str], pil, flat: bool = False):
-    """Draw the three bands over the map, stippled, or as flat tints for thumbnails."""
-    _I, ImageChops, _d, _f = pil
-    side = canvas.size[0]
+def paint_rain(side: int, raster, colours: dict[str, str], pil, flat: bool = False):
+    """The three bands as an RGBA layer over a transparent background:
+    stippled for the map, flat tints for a thumbnail."""
+    Image, ImageChops, _d, _f = pil
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     light = _band(raster, V_LIGHT, V_MODERATE)
     moderate = _band(raster, V_MODERATE, V_HEAVY)
     heavy = _band(raster, V_HEAVY, 256)
@@ -761,8 +696,7 @@ def paint_rain(canvas, raster, colours: dict[str, str], pil, flat: bool = False)
         canvas.paste(_hex(colours["heavy"]), mask=heavy)
         return canvas
     canvas.paste(
-        _hex(colours["light"]),
-        mask=ImageChops.multiply(light, _dots(side, 6, 2, pil)),
+        _hex(colours["light"]), mask=ImageChops.multiply(light, _dots(side, 6, 2, pil))
     )
     canvas.paste(
         _hex(colours["light"]),
@@ -773,11 +707,17 @@ def paint_rain(canvas, raster, colours: dict[str, str], pil, flat: bool = False)
 
 
 def _data_uri(im, pil, colors: int = 16) -> str:
+    """An RGBA layer as a palette PNG with transparency, base64."""
     Image = pil[0]
     buf = io.BytesIO()
-    im.convert("RGB").quantize(
-        colors=colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE
-    ).save(buf, "PNG", optimize=True)
+    try:
+        q = im.quantize(
+            colors=colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE
+        )
+        q.save(buf, "PNG", optimize=True)
+    except (ValueError, OSError):
+        buf = io.BytesIO()
+        im.save(buf, "PNG", optimize=True)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -1159,35 +1099,16 @@ def fetch(
     # Everything this render wants, in the order the budget should spend on
     # it, then fetched in parallel.
     store = TileStore(data_dir)
-    for _tx, _ty, path, url in base_jobs(view, data_dir):
-        store.want(path, url, BASE_TTL)
     for f in [latest] + nowcast_frames + list(reversed(strip_frames)):
         for _tx, _ty, path, url in radar_jobs(view, host, str(f["path"]), data_dir):
             store.want(path, url, RADAR_TTL)
     store.prefetch()
 
-    grey = base_grey(view, store, pil)
-    base_source = "esri"
-    map_credit = "Esri, HERE, Garmin, OpenStreetMap"
-    if grey is None:
-        try:
-            grey = natural_earth_grey(view, lat, lon, pil)
-            base_source = "natural_earth"
-            map_credit = "Natural Earth"
-        except (OSError, ValueError):
-            grey = None
-    if grey is None:
-        base_full = Image.new("RGB", (side, side), PAPER)
-        base_plain = base_full.copy()
-        base_source = "none"
-        map_credit = "no base map"
-        notices.append("Base map unavailable")
-    else:
-        # The opening that strips lettering is for the tiles only; the
-        # offline coastline has no text and its rivers are already gone.
-        label_zoom = view["zoom"] if base_source == "esri" else 99
-        base_full = two_tone(grey, pil, roads=True, zoom=label_zoom)
-        base_plain = two_tone(grey, pil, roads=False, zoom=label_zoom)
+    try:
+        coast = land_paths(view, lat, lon)
+    except (OSError, ValueError):
+        coast = {"land": "", "water": ""}
+        notices.append("Coastline unavailable")
 
     latest_raster = radar_raster(view, host, str(latest["path"]), store, pil)
     if latest_raster is None:
@@ -1230,15 +1151,16 @@ def fetch(
         notices.append("More frames on the next refresh")
 
     # ---- the pictures
-    main = paint_rain(base_full.copy(), latest_raster, colours, pil)
+    main = paint_rain(side, latest_raster, colours, pil)
     frames_out = []
     for f in strip_frames:
         ts = int(f.get("time") or 0)
         r = past_rasters.get(ts)
         if r is None:
             continue
-        thumb = paint_rain(base_plain.copy(), r, colours, pil, flat=True)
-        thumb = thumb.resize((THUMB_PX, THUMB_PX), Image.Resampling.BOX)
+        thumb = paint_rain(side, r, colours, pil, flat=True).resize(
+            (THUMB_PX, THUMB_PX), Image.Resampling.BOX
+        )
         sample = disc_sample(
             r, side / 2.0, side / 2.0, HOME_KM * view["px_per_km"], pil
         )
@@ -1321,6 +1243,8 @@ def fetch(
         "ring_px": round(RANGE_RING_KM.get(range_km, 25) * px_per_km, 1),
         "home_px": round(HOME_KM * px_per_km, 1),
         "map": _data_uri(main, pil, 16),
+        "land": coast["land"],
+        "lakes": coast["water"],
         "map_px": side,
         "px_per_km": round(px_per_km, 3),
         "zoom": view["zoom"],
@@ -1337,8 +1261,7 @@ def fetch(
         "drift_dir": drift_dir,
         "nearest_km": None if nearest is None else round(nearest["km"], 1),
         "samples": [[m, round(s["any"], 3), classify_sample(s)] for m, s in samples],
-        "credits": f"Radar: RainViewer \u00b7 Map: {map_credit}",
-        "base_source": base_source,
+        "credits": "Radar: RainViewer \u00b7 Coast: Natural Earth",
         "notices": notices,
         "partial": partial,
         "requests": store.used,

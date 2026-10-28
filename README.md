@@ -1,8 +1,7 @@
 # rain_radar
 
-The rain radar around the panel, drawn as a printed map: a label-free coast,
-water and main roads with the latest echoes stippled over them in three
-intensities, a range ring and a home mark, the last hour as a strip of small
+The rain radar around the panel, drawn as a printed map: a label-free coast
+and lakes with the latest echoes stippled over them in three intensities, a range ring and a home mark, the last hour as a strip of small
 frames, and a plain-words headline such as "Rain in about 20 min" or "Dry for
 the next hour".
 
@@ -45,29 +44,22 @@ widget will say "Dry for the next hour" over a place that simply has no
 radar. RainViewer's free API is for non-commercial display with attribution;
 the page carries "Radar: RainViewer".
 
-**Base map** tiles come from Esri's Light Gray Canvas (the base layer, which
-has no labels above zoom 8). The server thresholds the grey tiles into paper,
-light grey water with a black coastline and thin grey roads, so the map
-dithers cleanly on any panel. At the two lowest zooms the layer carries
-country and state names in the same grey as water; those are removed with a
-small morphological opening, which also drops the thinnest rivers at those
-zooms. CARTO's basemaps, the usual label-free choice, now answer every
-request with an "API key required" card, which is why Esri is used.
-
-Tile services change their terms, so the widget does not depend on this one.
-When the Esri tiles do not arrive, or come back as a placeholder card rather
-than a map, the coast is drawn offline instead from
+**Coast** needs no network and no key. It is
 [Natural Earth](https://www.naturalearthdata.com/) 1:10m land, minor islands
-and the larger lakes (public domain), packed into `land.bin` (about 550 kB)
-beside `server.py` by `tools/pack_land.py`. That coastline is simplified to
-about 650 m and has no roads, so it is coarser than the tiles at 50 km, but
-the map keeps its shape, and the foot of the page then reads "Map: Natural
-Earth".
+and the larger lakes (public domain), simplified to about 650 m and packed
+into `land.bin` (about 550 kB) beside `server.py`; `tools/pack_land.py`
+rebuilds it. The server projects the rings in view with Web Mercator at the
+zoom the range asks for, clips them, and sends SVG path data; the client
+paints land, water and the coastline from the theme's tokens, so the coast
+is crisp at every size and takes the dark theme with the rest of the page.
+There are no roads: at 50 km a city is its shoreline, its bay and its lakes.
+The 650 m simplification shows as slight angularity on a 50 km view of a
+large panel and not at all at 100 km and beyond.
 
-Base tiles are kept a week and radar tiles two hours under the widget's data
-folder. A render makes at most 40 tile requests, fetched in parallel; when a
-first render at 200 km on a large panel needs more than that, the oldest
-frames of the strip wait for the next refresh and a small notice says so.
+Radar tiles are kept two hours under the widget's data folder. A render
+makes at most 40 tile requests, fetched in parallel; a first render at 200 km
+on a large panel can need more than that, in which case the oldest frames of
+the strip wait for the next refresh and a small notice says so.
 
 ## What it shows
 
@@ -127,14 +119,14 @@ Channel.*
 
 ![London at 640x400, 50 km](screenshots/extra-5.png)
 
-*London at 640x400 and 50 km, the ring at 10 km. The Thames and the main
-roads come through from the base map; a dry hour.*
+*London at 640x400 and 50 km, the ring at 10 km. A dry hour; inland, the
+map is paper with the ring and the mark.*
 
 ![Vancouver at 640x400, dark theme](screenshots/extra-6.png)
 
-*Vancouver at 640x400 in the dark theme. The map is a literal picture and
-stays paper-white inside its frame; the type and the mark take the theme's
-colours.*
+*Vancouver at 640x400 in the dark theme. The coast is painted from the
+theme's tokens, so the map goes dark with the page; only the rain keeps its
+literal colours.*
 
 ## Small cells
 
@@ -148,17 +140,17 @@ colours.*
 
 ## Built for e-ink
 
-Everything on the map is one of a handful of literal colours: white paper,
-one light grey for water, black line work, and two teals (or two blacks)
-for rain, drawn as stipple rather than tints. Light rain is a sparse field
+The coast, water and paper are theme tokens (surface, sunken surface and the
+text colour for the shoreline). The rain is the only literal colour: two
+teals (or two blacks), drawn as stipple rather than tints. Light rain is a sparse field
 of 2 px squares, moderate a dense field of 3 px squares, heavy is solid, so
 the three bands survive a two-colour panel without relying on hue. The
 widget declares `design.palette: extended` because of those literal
 colours; the type and the frame use the Spectra tokens.
 
-Nothing animates, no fonts are loaded, and the whole picture is made on the
-server with Pillow, so the browser only lays out an image, a strip of
-thumbnails and a few lines of text.
+Nothing animates and no fonts are loaded. The rain layer is made on the
+server with Pillow as a PNG with a transparent background; the browser lays
+it over the vector coast in one SVG per map.
 
 ## Options
 
@@ -177,18 +169,14 @@ options**.
 ## Requirements
 
 Pillow in Tesserae's Python environment (it ships with Tesserae). Network
-access to `api.rainviewer.com`, `tilecache.rainviewer.com` and
-`server.arcgisonline.com`, declared in the manifest. Without the last the
-widget still draws, with the offline coastline.
+access to `api.rainviewer.com` and `tilecache.rainviewer.com`, declared in
+the manifest.
 
 ## Licence
 
 AGPL-3.0. See [LICENSE](LICENSE).
 
 Radar data and tiles from [RainViewer](https://www.rainviewer.com/api.html),
-free for non-commercial use with attribution. Base map tiles from Esri's
-[Light Gray Canvas](https://www.arcgis.com/home/item.html?id=ed712cb1db3e4bae9e85329040fb9a49):
-Esri, HERE, Garmin, (c) OpenStreetMap contributors, and the GIS user
-community. Offline coastline from [Natural Earth](https://www.naturalearthdata.com/)
-(public domain). The widget shows "Radar: RainViewer" and the map credit on
-the page.
+free for non-commercial use with attribution. Coastline from
+[Natural Earth](https://www.naturalearthdata.com/) (public domain). The
+widget shows "Radar: RainViewer" and "Coast: Natural Earth" on the page.

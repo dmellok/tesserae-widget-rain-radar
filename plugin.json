@@ -3,7 +3,7 @@
   "name": "Rain Radar",
   "version": "0.1.0",
   "kind": "widget",
-  "description": "The rain radar around the panel as a printed map: a label-free coast, water and roads with the latest echoes stippled over it in three intensities, a range ring and a home mark, the last hour as a strip of small frames, and a plain-words headline such as Rain in about 20 min or Dry for the next hour. Radar from RainViewer, base map from Esri, no key needed.",
+  "description": "The rain radar around the panel as a printed map: a label-free coast, water and roads with the latest echoes stippled over it in three intensities, a range ring and a home mark, the last hour as a strip of small frames, and a plain-words headline such as Rain in about 20 min or Dry for the next hour. Radar from RainViewer, coast from Natural Earth, no key needed.",
   "icon": "ph-cloud-rain",
   "category": "weather",
   "supports": {
@@ -16,8 +16,7 @@
   },
   "requires": [
     "network:api.rainviewer.com",
-    "network:tilecache.rainviewer.com",
-    "network:server.arcgisonline.com"
+    "network:tilecache.rainviewer.com"
   ],
   "design": {
     "palette": "extended"

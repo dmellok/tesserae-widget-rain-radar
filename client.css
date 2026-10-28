@@ -29,24 +29,15 @@
   overflow: hidden;
   border: 2px solid var(--rr-ink);
   box-sizing: border-box;
-  background: #fff;
+  background: var(--surface-sunken);
 }
-.rr-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: 50% 50%;
-}
-.rr-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.rr-ring { fill: none; stroke: #1a1a1a; opacity: 0.9; }
+.rr-mapsvg { display: block; width: 100%; height: 100%; }
+.rr-water { fill: var(--surface-sunken); }
+.rr-land { fill: var(--surface); stroke: var(--text-primary); stroke-linejoin: round; }
+.rr-lake { fill: var(--surface-sunken); stroke: var(--text-primary); stroke-linejoin: round; }
+.rr-ring { fill: none; stroke: var(--rr-ink); opacity: 0.9; }
 .rr-ringlabel {
-  fill: #1a1a1a;
+  fill: var(--rr-ink);
   font-weight: 800;
   letter-spacing: 0.04em;
   font-family: inherit;
@@ -79,10 +70,9 @@
   max-width: 100%;
   border: 1.5px solid var(--rr-ink);
   box-sizing: border-box;
-  background: #fff;
+  background: var(--surface-sunken);
   overflow: hidden;
 }
-.rr-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .rr-ftime {
   flex: 0 0 auto;
   font-size: clamp(11px, 2.6cqmin, 22px);
@@ -227,7 +217,7 @@
   border-radius: 50%;
   border: 1.5px solid var(--rr-ink);
   box-sizing: border-box;
-  background-color: #fff;
+  background-color: var(--surface);
   flex: 0 0 auto;
 }
 .rr-sw-light {

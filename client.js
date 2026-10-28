@@ -1,10 +1,10 @@
 // rain_radar: the radar around the panel as a printed map.
 //
-// The server hands over the finished map as a PNG data URI (a square of the
-// view, home at the centre), a strip of thumbnails, and the headline. This
-// file only lays them out. The map sits under object-fit: cover and the ring
-// and home mark are an SVG with the same viewBox and "slice" fitting, so the
-// overlay lands on the same pixels whatever shape the cell is.
+// The server hands over the coast as SVG path data (Natural Earth, in the
+// pixels of a square view with home at the centre), the radar as a PNG data
+// URI with a transparent background in the same pixels, a strip of
+// thumbnails, and the headline. This file lays them out: one SVG per map
+// with the coast painted from the theme's tokens and the radar on top.
 //
 // Two layouts: "strip" (the map in a ruled frame, the last hour as a strip of
 // frames beneath it, the title and headline set along the right edge reading
@@ -17,7 +17,7 @@ const esc = (s) =>
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 
-function overlay(d) {
+function marks(d) {
   const s = Number(d.map_px) || 1;
   const c = s / 2;
   const ring = Number(d.ring_px) || 0;
@@ -28,8 +28,7 @@ function overlay(d) {
   const label = ring > fs * 2 && d.ring_km
     ? '<text class="rr-ringlabel" x="' + (c + ring * 0.7071 + fs * 0.3).toFixed(1) + '" y="' + (c - ring * 0.7071 - fs * 0.3).toFixed(1) + '" font-size="' + fs.toFixed(1) + '">' + esc(d.ring_km) + " km</text>"
     : "";
-  return '<svg class="rr-overlay" viewBox="0 0 ' + s + " " + s + '" preserveAspectRatio="xMidYMid slice" aria-hidden="true">'
-    + '<circle class="rr-ring" cx="' + c + '" cy="' + c + '" r="' + ring.toFixed(1) + '" stroke-width="' + sw.toFixed(1) + '" stroke-dasharray="' + (sw * 4).toFixed(1) + " " + (sw * 3).toFixed(1) + '"/>'
+  return '<circle class="rr-ring" cx="' + c + '" cy="' + c + '" r="' + ring.toFixed(1) + '" stroke-width="' + sw.toFixed(1) + '" stroke-dasharray="' + (sw * 4).toFixed(1) + " " + (sw * 3).toFixed(1) + '"/>'
     + label
     + '<g class="rr-home" stroke-width="' + (sw * 1.4).toFixed(1) + '">'
     + '<line x1="' + (c - arm) + '" y1="' + c + '" x2="' + (c - gap) + '" y2="' + c + '"/>'
@@ -37,21 +36,36 @@ function overlay(d) {
     + '<line x1="' + c + '" y1="' + (c - arm) + '" x2="' + c + '" y2="' + (c - gap) + '"/>'
     + '<line x1="' + c + '" y1="' + (c + gap) + '" x2="' + c + '" y2="' + (c + arm) + '"/>'
     + '<circle cx="' + c + '" cy="' + c + '" r="' + (gap * 0.9).toFixed(1) + '"/>'
-    + "</g></svg>";
+    + "</g>";
+}
+
+// One SVG carries the whole picture: the Natural Earth coast as paths
+// painted from the theme's tokens, the radar PNG (transparent where it is
+// dry) as an image in the same pixel space, and for the main map the ring
+// and the home mark. The viewBox is the server's map square, so every
+// layer lands on the same pixels whatever shape the cell is.
+function mapSvg(d, src, coastPx, withMarks) {
+  const s = Number(d.map_px) || 1;
+  return '<svg class="rr-mapsvg" viewBox="0 0 ' + s + " " + s + '" preserveAspectRatio="xMidYMid slice" aria-hidden="true">'
+    + '<rect class="rr-water" x="0" y="0" width="' + s + '" height="' + s + '"/>'
+    + (d.land ? '<path class="rr-land" d="' + esc(d.land) + '" stroke-width="' + coastPx.toFixed(2) + '"/>' : "")
+    + (d.lakes ? '<path class="rr-lake" d="' + esc(d.lakes) + '" stroke-width="' + (coastPx * 0.8).toFixed(2) + '"/>' : "")
+    + (src ? '<image href="' + esc(src) + '" x="0" y="0" width="' + s + '" height="' + s + '" preserveAspectRatio="none"/>' : "")
+    + (withMarks ? marks(d) : "")
+    + "</svg>";
 }
 
 function mapBox(d) {
-  return '<div class="rr-map">'
-    + '<img class="rr-img" src="' + esc(d.map) + '" alt="">'
-    + overlay(d)
-    + "</div>";
+  const s = Number(d.map_px) || 1;
+  return '<div class="rr-map">' + mapSvg(d, d.map, Math.max(1.5, s * 0.003), true) + "</div>";
 }
 
 function film(d) {
   const frames = Array.isArray(d.frames) ? d.frames : [];
   if (!frames.length) return "";
+  const s = Number(d.map_px) || 1;
   return '<div class="rr-film">' + frames.map((f) =>
-    '<div class="rr-frame"><div class="rr-thumb"><img src="' + esc(f.thumb) + '" alt=""></div>'
+    '<div class="rr-frame"><div class="rr-thumb">' + mapSvg(d, f.thumb, s / 110, false) + "</div>"
     + '<div class="rr-ftime">' + esc(f.time) + "</div></div>").join("") + "</div>";
 }
 

@@ -43,7 +43,10 @@ def test_manifest_essentials() -> None:
     assert MANIFEST["design"] == {"palette": "extended"}
     assert "network:api.rainviewer.com" in MANIFEST["requires"]
     assert "network:tilecache.rainviewer.com" in MANIFEST["requires"]
-    assert "network:server.arcgisonline.com" in MANIFEST["requires"]
+    assert MANIFEST["requires"] == [
+        "network:api.rainviewer.com",
+        "network:tilecache.rainviewer.com",
+    ]
     assert "network:*" not in MANIFEST["requires"]
 
 

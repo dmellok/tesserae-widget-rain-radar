@@ -260,13 +260,6 @@ def test_fetch_draws_a_map_from_fake_tiles(tmp_path, monkeypatch):
         "radar": {"past": past, "nowcast": []},
     }
 
-    base = Image.new("L", (256, 256), 232)
-    d = ImageDraw.Draw(base)
-    d.ellipse((20, 20, 120, 120), fill=208)
-    d.line((0, 200, 256, 200), fill=255, width=2)
-    base_buf = io.BytesIO()
-    base.save(base_buf, "JPEG", quality=95)
-
     def radar_png(step: int) -> bytes:
         x = 100 + step * 40
         return _tile([((x, 200, x + 90, 290), 34)])
@@ -291,8 +284,6 @@ def test_fetch_draws_a_map_from_fake_tiles(tmp_path, monkeypatch):
         calls.append(url)
         if url == server.INDEX_URL:
             return Resp(json.dumps(index).encode("utf-8"))
-        if "arcgisonline" in url:
-            return Resp(base_buf.getvalue())
         if "tilecache.rainviewer.com" in url:
             step = int(url.split("/v2/radar/f")[1].split("/")[0])
             return Resp(radar_png(step))
@@ -303,6 +294,8 @@ def test_fetch_draws_a_map_from_fake_tiles(tmp_path, monkeypatch):
     out = server.fetch({**MELBOURNE, "range": "100", "frames": "6"}, {}, ctx=ctx)
     assert "error" not in out, out.get("error")
     assert out["map"].startswith("data:image/png;base64,")
+    assert out["land"].startswith("M") and out["credits"].endswith("Natural Earth")
+    assert not any("arcgis" in u for u in calls)
     assert out["map_px"] > 0 and out["ring_km"] == 25
     assert len(out["frames"]) == 6
     stamps = [f["ts"] for f in out["frames"]]
@@ -319,71 +312,42 @@ def test_fetch_draws_a_map_from_fake_tiles(tmp_path, monkeypatch):
     assert len(calls) == before
 
 
-# ----- the offline coastline --------------------------------------------
+# ----- the coastline ----------------------------------------------------
 
 
-def test_natural_earth_fallback_draws_port_phillip_bay():
+def _rasterise(view, rings):
+    im = Image.new("L", (view["side"], view["side"]), 1)
+    d = ImageDraw.Draw(im)
+    for kind, poly in rings:
+        d.polygon(poly, fill=2 if kind == 0 else 1)
+    return im
+
+
+def test_natural_earth_rings_put_port_phillip_bay_in_the_water():
     """Melbourne's CBD is land and the bay 20 km south of it is water."""
     view = server.plan_view(-37.81, 144.96, 100, 640)
-    grey = server.natural_earth_grey(view, -37.81, 144.96, PIL)
-    side = view["side"]
-    ppk = view["px_per_km"]
-    assert grey.size == (side, side)
-    assert grey.getpixel((side // 2, side // 2 - int(3 * ppk))) == server.LAND_GREY
-    assert grey.getpixel((side // 2, side // 2 + int(20 * ppk))) == server.WATER_GREY
-    canvas = server.two_tone(grey, PIL, roads=False, zoom=99)
-    assert canvas.getpixel((side // 2, side // 2 + int(20 * ppk))) == server.WATER
+    rings = server.land_rings(view, -37.81, 144.96)
+    assert rings and all(k in (0, 1) for k, _p in rings)
+    im = _rasterise(view, rings)
+    side, ppk = view["side"], view["px_per_km"]
+    assert im.getpixel((side // 2, side // 2 - int(3 * ppk))) == 2
+    assert im.getpixel((side // 2, side // 2 + int(20 * ppk))) == 1
 
 
-def test_a_placeholder_base_tile_is_not_a_canvas():
-    card = Image.new("L", (256, 256), 255)
-    ImageDraw.Draw(card).text((60, 120), "API KEY REQUIRED", fill=90)
-    assert not server._looks_like_canvas(card)
-    sea = Image.new("L", (256, 256), server.WATER_GREY)
-    assert server._looks_like_canvas(sea)
-    land = Image.new("L", (256, 256), server.LAND_GREY)
-    ImageDraw.Draw(land).line((0, 100, 256, 100), fill=255, width=3)
-    assert server._looks_like_canvas(land)
+def test_land_paths_are_svg_path_data_in_map_pixels():
+    view = server.plan_view(-37.81, 144.96, 50, 1200)
+    paths = server.land_paths(view, -37.81, 144.96)
+    assert paths["land"].startswith("M") and paths["land"].endswith("Z")
+    for token in paths["land"][1:].replace("Z", "").replace("M", "L").split("L"):
+        x, y = (float(v) for v in token.split())
+        assert -5 <= x <= view["side"] + 5 and -5 <= y <= view["side"] + 5
+    assert server.land_paths(view, -37.81, 144.96) is paths  # cached
 
 
-def test_fetch_falls_back_to_the_offline_coast_when_tiles_are_placeholders(
-    tmp_path, monkeypatch
-):
-    now = 1_793_000_000
-    past = [{"time": now - 600 * (3 - i), "path": f"/v2/radar/g{i}"} for i in range(4)]
-    index = {
-        "host": "https://tilecache.rainviewer.com",
-        "radar": {"past": past, "nowcast": []},
-    }
-    card = Image.new("L", (256, 256), 255)
-    ImageDraw.Draw(card).text((60, 120), "API KEY REQUIRED", fill=90)
-    card_buf = io.BytesIO()
-    card.save(card_buf, "PNG")
-
-    class Resp:
-        def __init__(self, raw):
-            self.raw = raw
-
-        def read(self):
-            return self.raw
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def fake_open(req, timeout=0):
-        url = req.full_url
-        if url == server.INDEX_URL:
-            return Resp(json.dumps(index).encode("utf-8"))
-        if "arcgisonline" in url:
-            return Resp(card_buf.getvalue())
-        return Resp(_tile([((200, 200, 300, 300), 30)]))
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
-    ctx = {"data_dir": str(tmp_path), "cell_w": 640, "cell_h": 400, "fresh": True}
-    out = server.fetch({**MELBOURNE, "frames": "4"}, {}, ctx=ctx)
-    assert "error" not in out
-    assert out["base_source"] == "natural_earth"
-    assert out["credits"].endswith("Natural Earth")
+def test_rain_layer_is_transparent_where_dry():
+    raster = Image.new("L", (200, 200), 0)
+    ImageDraw.Draw(raster).rectangle((100, 0, 200, 200), fill=server.V_HEAVY + 2)
+    layer = server.paint_rain(200, raster, server.COLOURS["teal"], PIL)
+    assert layer.mode == "RGBA"
+    assert layer.getpixel((20, 20))[3] == 0
+    assert layer.getpixel((150, 100)) == server._hex(server.COLOURS["teal"]["heavy"])
