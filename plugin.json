@@ -1,0 +1,123 @@
+{
+  "tesserae_compat": "1.x",
+  "name": "Rain Radar",
+  "version": "0.1.0",
+  "kind": "widget",
+  "description": "The rain radar around the panel as a printed map: a label-free coast, water and roads with the latest echoes stippled over it in three intensities, a range ring and a home mark, the last hour as a strip of small frames, and a plain-words headline such as Rain in about 20 min or Dry for the next hour. Radar from RainViewer, base map from Esri, no key needed.",
+  "icon": "ph-cloud-rain",
+  "category": "weather",
+  "supports": {
+    "sizes": [
+      "xs",
+      "sm",
+      "md",
+      "lg"
+    ]
+  },
+  "requires": [
+    "network:api.rainviewer.com",
+    "network:tilecache.rainviewer.com",
+    "network:server.arcgisonline.com"
+  ],
+  "design": {
+    "palette": "extended"
+  },
+  "render": {
+    "needs_network": true
+  },
+  "cell_options": [
+    {
+      "name": "location",
+      "type": "location_search",
+      "label": "Place",
+      "help": "Home, at the centre of the map. Falls back to the app-level location in Settings when empty.",
+      "default": ""
+    },
+    {
+      "name": "range",
+      "type": "select",
+      "label": "Within",
+      "default": "100",
+      "help": "How much country the short side of the cell shows. The ring is drawn at a tenth, a quarter or a half of it.",
+      "choices": [
+        {
+          "value": "50",
+          "label": "50 km, the city"
+        },
+        {
+          "value": "100",
+          "label": "100 km, the region"
+        },
+        {
+          "value": "200",
+          "label": "200 km, the state"
+        }
+      ]
+    },
+    {
+      "name": "layout",
+      "type": "select",
+      "label": "Layout",
+      "default": "strip",
+      "help": "Map and strip puts the last hour under the map with the headline set along the edge. Map and headline gives the headline the room, with a legend of the three intensities.",
+      "choices": [
+        {
+          "value": "strip",
+          "label": "Map and strip"
+        },
+        {
+          "value": "headline",
+          "label": "Map and headline"
+        }
+      ]
+    },
+    {
+      "name": "frames",
+      "type": "select",
+      "label": "How many frames",
+      "default": "6",
+      "advanced": true,
+      "help": "Past frames in the strip, ten minutes apart. More frames means more tile requests on the first render.",
+      "choices": [
+        {
+          "value": "4",
+          "label": "4, the last 40 minutes"
+        },
+        {
+          "value": "6",
+          "label": "6, the last hour"
+        },
+        {
+          "value": "8",
+          "label": "8, the last 80 minutes"
+        }
+      ]
+    },
+    {
+      "name": "colour",
+      "type": "select",
+      "label": "Rain colour",
+      "default": "teal",
+      "advanced": true,
+      "help": "Teal stipple for colour panels. Ink draws the rain in black for a black and white panel.",
+      "choices": [
+        {
+          "value": "teal",
+          "label": "Teal"
+        },
+        {
+          "value": "ink",
+          "label": "Ink"
+        }
+      ]
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "label": "Title",
+      "default": "Rain radar",
+      "advanced": true,
+      "help": "The words before the time. Leave empty to show the place instead."
+    }
+  ]
+}
